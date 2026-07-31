@@ -1,0 +1,48 @@
+{
+  "name": "opencode-script-runner",
+  "version": "0.1.0",
+  "description": "Run shell scripts in the background from OpenCode and get notified when they finish.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "background",
+    "script",
+    "process",
+    "runner"
+  ],
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.2.25",
+    "@opencode-ai/sdk": "^1.2.25"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.9.3"
+  }
+}
