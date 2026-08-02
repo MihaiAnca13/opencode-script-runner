@@ -151,6 +151,7 @@ export class RunManager {
             run.timeout = setTimeout(() => {
                 void this.finish(run, "timeout", `Run timed out after ${input.timeout}ms`);
                 this.killProcessTree(run);
+                this.scheduleEscalation(run);
             }, input.timeout);
         }
 
@@ -172,6 +173,41 @@ export class RunManager {
                 // ignore
             }
         }
+    }
+
+    private scheduleEscalation(run: Run): void {
+        if (!run.child?.pid) {
+            return;
+        }
+        const pid = run.child.pid;
+        setTimeout(() => {
+            if (!this.runs.has(run.id)) {
+                return;
+            }
+            try {
+                process.kill(-pid, 0);
+            }
+            catch {
+                return;
+            }
+            let killed = false;
+            try {
+                process.kill(-pid, "SIGKILL");
+                killed = true;
+            }
+            catch {
+                try {
+                    process.kill(pid, "SIGKILL");
+                    killed = true;
+                }
+                catch {
+                    killed = false;
+                }
+            }
+            if (!killed) {
+                this.notify(run, `Cancel escalation failed: could not SIGKILL process group ${pid}. Try stopping the process manually.`);
+            }
+        }, 2000);
     }
 
     private async finish(
@@ -196,7 +232,7 @@ export class RunManager {
             run.error = errorMessage;
         }
         run.tail = await this.readLogTail(run);
-        await this.notify(run);
+        this.notify(run);
     }
 
     private async readLogTail(run: Run): Promise<string> {
@@ -209,19 +245,21 @@ export class RunManager {
         }
     }
 
-    async notify(run: Run): Promise<void> {
-        const parts = [{ type: "text" as const, text: formatWakeNotification(run) }];
-        try {
-            await this.client.session.prompt({
+    notify(run: Run, extra?: string): void {
+        const text = extra
+            ? `${formatWakeNotification(run)}\n\n${extra}`
+            : formatWakeNotification(run);
+        const parts = [{ type: "text" as const, text }];
+        void Promise.resolve(
+            this.client.session.promptAsync({
                 path: { id: run.sessionID },
                 body: run.agent
                     ? { noReply: false, agent: run.agent, parts }
                     : { noReply: false, parts },
-            });
-        }
-        catch (error) {
-            await this.debug(`notify failed: ${error instanceof Error ? error.message : "unknown error"}`);
-        }
+            }),
+        ).catch((error) => {
+            void this.debug(`notify failed: ${error instanceof Error ? error.message : "unknown error"}`);
+        });
     }
 
     async cancel(id: string): Promise<Run | undefined> {
@@ -230,8 +268,15 @@ export class RunManager {
             return undefined;
         }
         if (run.status === "running") {
-            await this.finish(run, "cancelled", undefined, null, "SIGTERM");
+            if (run.timeout) {
+                clearTimeout(run.timeout);
+                run.timeout = undefined;
+            }
+            run.status = "cancelled";
+            run.signal = "SIGTERM";
+            run.finishedAt = new Date();
             this.killProcessTree(run);
+            this.scheduleEscalation(run);
         }
         return run;
     }

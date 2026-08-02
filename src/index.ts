@@ -127,11 +127,22 @@ export const ScriptRunnerPlugin: Plugin = async ({ client, directory }) => {
                     run_id: tool.schema.string().describe("The run id returned by script_run."),
                 },
                 async execute(args) {
-                    const run = await manager.cancel(args.run_id);
+                    const fastest = Promise.race([
+                        manager.cancel(args.run_id),
+                        new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2000)),
+                    ]);
+                    const run = await fastest;
                     if (!run) {
-                        return `No run found with id "${args.run_id}".`;
+                        const known = manager.getStatus(args.run_id);
+                        if (!known) {
+                            return `No run found with id "${args.run_id}".`;
+                        }
+                        return `Run ${args.run_id}: cancel did not complete within 2s. Try stopping the process manually (e.g. \`docker compose down\`, \`pkill -f <script>\`).`;
                     }
-                    return `Run ${run.id} cancelled.`;
+                    const hint = /docker|compose|make dev|up --build/i.test(run.script)
+                        ? " If this was a Docker Compose stack, containers may outlive the script; run \`docker compose down\` (or \`make down\`) to stop them."
+                        : "";
+                    return `Run ${run.id} cancelled.${hint}`;
                 },
             }),
         },

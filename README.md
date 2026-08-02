@@ -17,14 +17,12 @@ This is an OpenCode server plugin. It runs on your machine inside the OpenCode s
 
 This package is published to the public npm registry.
 
-Add it to your OpenCode config. Open your global config at `~/.config/opencode/opencode.json` and add the name to the `plugin` array:
+Add it to your OpenCode config. Open your global config at `~/.config/opencode/opencode.json` and add the package name to the `plugin` array:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
-    "opencode-background-agents",
-    "opencode-notify",
     "opencode-script-runner"
   ]
 }
@@ -41,7 +39,7 @@ The plugin adds four tools. Each is called by the OpenCode agent (you) and retur
 ### Start a script
 
 ```text
-script_run(script="/home/mihai/train.sh")
+script_run(script="./train.sh")
 ```
 
 This starts `train.sh` in the background and returns a run id, for example `calm-falcon-4321`. The agent keeps working. When the script finishes, the plugin sends a wake notification with the exit code and the last part of the output.
@@ -49,7 +47,7 @@ This starts `train.sh` in the background and returns a run id, for example `calm
 Pass arguments, a working directory, and a timeout if needed:
 
 ```text
-script_run(script="./train.sh", args=["--epochs", "100"], cwd="/home/mihai/project", timeout=3600000)
+script_run(script="./train.sh", args=["--epochs", "100"], cwd="/path/to/project", timeout=3600000)
 ```
 
 Use an interpreter when the script is not executable or is in another language:
@@ -81,7 +79,11 @@ Returns the whole log, or only the last `tail` lines. Each run writes its own lo
 script_cancel(run_id="calm-falcon-4321")
 ```
 
-Kills the whole process group of the script, including any child processes.
+Kills the whole process group of the script, including any child processes, then escalates to SIGKILL if the group is still alive after 2 seconds. Returns immediately (never waits on the model). The cancel result is returned to the caller; no wake notification is emitted for an explicit cancel (the caller asked for it). Check `script_status` after cancelling to confirm the run is stopped.
+
+Cancel is fail-fast: the tool resolves within 2 seconds no matter what. If the process cannot be confirmed stopped, it returns an error and the agent can try other measures.
+
+Note: a `docker compose up` (or other daemon-managed) stack can outlive the script process group — the containers run under `dockerd`, so a plain process-group kill may not stop them. Run `docker compose down` to stop a stack.
 
 ## Wake notification
 
