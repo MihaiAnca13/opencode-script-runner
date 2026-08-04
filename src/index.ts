@@ -66,28 +66,33 @@ export const ScriptRunnerPlugin: Plugin = async ({ client, directory }) => {
                         .optional(),
                 },
                 async execute(args, ctx) {
-                    const cwd = args.cwd ?? ctx.directory;
-                    const run = await manager.start({
-                        sessionID: ctx.sessionID,
-                        agent: ctx.agent,
-                        script: args.script,
-                        args: args.args,
-                        cwd,
-                        env: args.env,
-                        interpreter: args.interpreter,
-                        timeout: args.timeout,
-                    });
-                    if (run.status === "error") {
-                        return `Run ${run.id} failed to start: ${run.error ?? "unknown error"}`;
+                    try {
+                        const cwd = args.cwd ?? ctx.directory;
+                        const run = await manager.start({
+                            sessionID: ctx.sessionID,
+                            agent: ctx.agent,
+                            script: args.script,
+                            args: args.args,
+                            cwd,
+                            env: args.env,
+                            interpreter: args.interpreter,
+                            timeout: args.timeout,
+                        });
+                        if (run.status === "error") {
+                            return `Run ${run.id} failed to start: ${run.error ?? "unknown error"}`;
+                        }
+                        const lines = [
+                            `Background run started: ${run.id}`,
+                            `Script: ${args.script}`,
+                            `Log file: ${run.logFile}`,
+                            "You will be notified with a script-done notification when it finishes.",
+                            "Use script_status to check it and script_cancel to stop it. Do not poll.",
+                        ];
+                        return lines.join("\n");
                     }
-                    const lines = [
-                        `Background run started: ${run.id}`,
-                        `Script: ${args.script}`,
-                        `Log file: ${run.logFile}`,
-                        "You will be notified with a script-done notification when it finishes.",
-                        "Use script_status to check it and script_cancel to stop it. Do not poll.",
-                    ];
-                    return lines.join("\n");
+                    catch (error) {
+                        return `script_run failed: ${error instanceof Error ? error.message : "unknown error"}`;
+                    }
                 },
             }),
             script_status: tool({
@@ -96,12 +101,17 @@ export const ScriptRunnerPlugin: Plugin = async ({ client, directory }) => {
                     run_id: tool.schema.string().describe("The run id returned by script_run."),
                 },
                 async execute(args) {
-                    const run = manager.getStatus(args.run_id);
-                    if (!run) {
-                        return `No run found with id "${args.run_id}". Use script_run to start one.`;
+                    try {
+                        const run = manager.getStatus(args.run_id);
+                        if (!run) {
+                            return `No run found with id "${args.run_id}". Use script_run to start one.`;
+                        }
+                        const state = run.status === "running" ? "still running" : `finished (${run.status})`;
+                        return `Run ${run.id}: ${state}. ${describeStatus(run)}`;
                     }
-                    const state = run.status === "running" ? "still running" : `finished (${run.status})`;
-                    return `Run ${run.id}: ${state}. ${describeStatus(run)}`;
+                    catch (error) {
+                        return `script_status failed: ${error instanceof Error ? error.message : "unknown error"}`;
+                    }
                 },
             }),
             script_log: tool({
@@ -114,11 +124,16 @@ export const ScriptRunnerPlugin: Plugin = async ({ client, directory }) => {
                         .optional(),
                 },
                 async execute(args) {
-                    const log = await manager.readLog(args.run_id, args.tail ?? 0);
-                    if (log === undefined) {
-                        return `No run found with id "${args.run_id}".`;
+                    try {
+                        const log = await manager.readLog(args.run_id, args.tail ?? 0);
+                        if (log === undefined) {
+                            return `No run found with id "${args.run_id}".`;
+                        }
+                        return `## Output of run ${args.run_id}\n\n\`\`\`\n${log}\n\`\`\``;
                     }
-                    return `## Output of run ${args.run_id}\n\n\`\`\`\n${log}\n\`\`\``;
+                    catch (error) {
+                        return `script_log failed: ${error instanceof Error ? error.message : "unknown error"}`;
+                    }
                 },
             }),
             script_cancel: tool({
@@ -127,22 +142,27 @@ export const ScriptRunnerPlugin: Plugin = async ({ client, directory }) => {
                     run_id: tool.schema.string().describe("The run id returned by script_run."),
                 },
                 async execute(args) {
-                    const fastest = Promise.race([
-                        manager.cancel(args.run_id),
-                        new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2000)),
-                    ]);
-                    const run = await fastest;
-                    if (!run) {
-                        const known = manager.getStatus(args.run_id);
-                        if (!known) {
-                            return `No run found with id "${args.run_id}".`;
+                    try {
+                        const fastest = Promise.race([
+                            Promise.resolve(manager.cancel(args.run_id)).catch(() => undefined),
+                            new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2000)),
+                        ]);
+                        const run = await fastest;
+                        if (!run) {
+                            const known = manager.getStatus(args.run_id);
+                            if (!known) {
+                                return `No run found with id "${args.run_id}".`;
+                            }
+                            return `Run ${args.run_id}: cancel did not complete within 2s. Try stopping the process manually (e.g. \`docker compose down\`, \`pkill -f <script>\`).`;
                         }
-                        return `Run ${args.run_id}: cancel did not complete within 2s. Try stopping the process manually (e.g. \`docker compose down\`, \`pkill -f <script>\`).`;
+                        const hint = /docker|compose|make dev|up --build/i.test(run.script)
+                            ? " If this was a Docker Compose stack, containers may outlive the script; run \`docker compose down\` (or \`make down\`) to stop them."
+                            : "";
+                        return `Run ${run.id} cancelled.${hint}`;
                     }
-                    const hint = /docker|compose|make dev|up --build/i.test(run.script)
-                        ? " If this was a Docker Compose stack, containers may outlive the script; run \`docker compose down\` (or \`make down\`) to stop them."
-                        : "";
-                    return `Run ${run.id} cancelled.${hint}`;
+                    catch (error) {
+                        return `script_cancel failed: ${error instanceof Error ? error.message : "unknown error"}`;
+                    }
                 },
             }),
         },

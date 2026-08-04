@@ -158,19 +158,22 @@ export class RunManager {
         return run;
     }
 
-    private killProcessTree(run: Run): void {
+    private killProcessTree(run: Run, signal: NodeJS.Signals = "SIGTERM"): void {
         if (!run.child || !run.child.pid) {
             return;
         }
+        const pid = run.child.pid;
         try {
-            process.kill(-run.child.pid, "SIGTERM");
+            process.kill(-pid, signal);
+            void this.debug(`killProcessTree: sent ${signal} to process group ${pid} (run ${run.id})`);
         }
         catch {
             try {
-                run.child.kill("SIGTERM");
+                run.child.kill(signal);
+                void this.debug(`killProcessTree: sent ${signal} to leader ${pid} (run ${run.id})`);
             }
             catch {
-                // ignore
+                void this.debug(`killProcessTree: could not signal ${pid} (run ${run.id})`);
             }
         }
     }
@@ -184,10 +187,16 @@ export class RunManager {
             if (!this.runs.has(run.id)) {
                 return;
             }
+            let alive = false;
             try {
                 process.kill(-pid, 0);
+                alive = true;
             }
             catch {
+                alive = false;
+            }
+            if (!alive) {
+                void this.debug(`scheduleEscalation: group ${pid} already gone (run ${run.id})`);
                 return;
             }
             let killed = false;
@@ -204,8 +213,11 @@ export class RunManager {
                     killed = false;
                 }
             }
-            if (!killed) {
-                this.notify(run, `Cancel escalation failed: could not SIGKILL process group ${pid}. Try stopping the process manually.`);
+            if (killed) {
+                void this.debug(`scheduleEscalation: SIGKILL sent to process group ${pid} (run ${run.id})`);
+            }
+            else {
+                void this.debug(`scheduleEscalation: could not SIGKILL process group ${pid} (run ${run.id}); stop manually`);
             }
         }, 2000);
     }
@@ -218,6 +230,7 @@ export class RunManager {
         signal?: string | null,
     ): Promise<void> {
         if (run.status !== "running") {
+            void this.debug(`finish: suppressed for ${run.id} (status=${run.status})`);
             return;
         }
         run.status = status;
@@ -265,6 +278,7 @@ export class RunManager {
     async cancel(id: string): Promise<Run | undefined> {
         const run = this.runs.get(id);
         if (!run) {
+            void this.debug(`cancel: no run ${id}`);
             return undefined;
         }
         if (run.status === "running") {
@@ -275,8 +289,12 @@ export class RunManager {
             run.status = "cancelled";
             run.signal = "SIGTERM";
             run.finishedAt = new Date();
+            void this.debug(`cancel: signalling ${id} (pid ${run.child?.pid ?? "none"}, group kill)`);
             this.killProcessTree(run);
             this.scheduleEscalation(run);
+        }
+        else {
+            void this.debug(`cancel: ${id} already ${run.status}`);
         }
         return run;
     }
