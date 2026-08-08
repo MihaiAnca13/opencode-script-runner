@@ -1,6 +1,6 @@
 {
   "name": "opencode-script-runner",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Run shell scripts in the background from OpenCode and get notified when they finish.",
   "license": "MIT",
   "repository": {
