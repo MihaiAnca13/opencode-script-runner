@@ -6,6 +6,9 @@ import { randomInt } from "node:crypto";
 
 const MAX_LOG_TAIL = 20000;
 
+const SHELL_META = /[&|;<>()$`\\{}*?[\]!~\n]/;
+const COMMAND_SPACE = /^\s*(\S+)\s+\S/;
+
 type Client = ReturnType<typeof import("@opencode-ai/sdk").createOpencodeClient>;
 
 type RunStatus = "running" | "complete" | "cancelled" | "error" | "timeout";
@@ -61,6 +64,9 @@ function formatWakeNotification(run: Run): string {
                 : "failed";
     const exit = run.exitCode !== null ? String(run.exitCode) : "none";
     const signal = run.signal ? `signal=${escapeMarkup(run.signal)}` : "";
+    const errorLine = run.error
+        ? `\n<error>${escapeMarkup(run.error)}</error>`
+        : "";
     const logFile = run.logFile
         ? `\nLog file: \`${escapeMarkup(run.logFile)}\`\nUse \`script_log(run_id="${escapeMarkup(run.id)}")\` to read the full output.`
         : "";
@@ -71,7 +77,7 @@ function formatWakeNotification(run: Run): string {
 <status>${run.status}</status>
 <description>The background script run ${escapeMarkup(run.id)} ${state}.</description>
 <exit-code>${exit}</exit-code>
-${signal}
+${signal}${errorLine}
 <output-tail>
 ${escapeMarkup(tail)}
 </output-tail>${logFile}
@@ -104,8 +110,10 @@ export class RunManager {
         }
 
         await fs.mkdir(this.baseDir, { recursive: true });
-        const logFile = path.join(this.baseDir, `${id}.log`);
         const rootID = await this.rootSessionID(input.sessionID);
+
+        const { bin, binArgs } = await this.resolveCommand(input);
+        const logFile = path.join(this.baseDir, `${id}.log`);
 
         const run: Run = {
             id,
@@ -121,8 +129,8 @@ export class RunManager {
         };
         this.runs.set(id, run);
 
-        const bin = input.interpreter ?? input.script;
-        const binArgs = input.interpreter ? [input.script, ...(input.args ?? [])] : (input.args ?? []);
+        void this.debug(`start: ${id} script=${input.script} interpreter=${input.interpreter ?? "none"} args=${JSON.stringify(input.args ?? [])} cwd=${input.cwd ?? process.cwd()}`);
+
         const child = spawn(bin, binArgs, {
             cwd: input.cwd,
             env: input.env ? { ...process.env, ...input.env } : process.env,
@@ -131,19 +139,22 @@ export class RunManager {
         });
         run.child = child;
 
-        let output = "";
+        const fail = async (message: string): Promise<void> => {
+            run.error = message;
+            void fs.appendFile(logFile, `${message}\n`).catch(() => undefined);
+            void this.debug(`spawn-failed: ${id} ${message}`);
+            await this.finish(run, "error", message);
+        };
+        child.on("error", async (error) => {
+            await fail(`Failed to start process: ${error.message}`);
+        });
         const append = (chunk: Buffer | string): void => {
-            output += chunk.toString();
             void fs.appendFile(logFile, chunk).catch(() => undefined);
         };
         child.stdout?.on("data", append);
         child.stderr?.on("data", append);
-        child.on("error", async (error) => {
-            run.tail = output;
-            await this.finish(run, "error", error.message);
-        });
         child.on("exit", async (code, signal) => {
-            run.tail = output;
+            run.tail = await this.readLogTail(run);
             await this.finish(run, code === 0 ? "complete" : "error", undefined, code, signal);
         });
 
@@ -156,6 +167,35 @@ export class RunManager {
         }
 
         return run;
+    }
+
+    private async resolveCommand(input: {
+        script: string;
+        args?: string[];
+        interpreter?: string;
+    }): Promise<{ bin: string; binArgs: string[] }> {
+        const script = input.script;
+        let isFile = false;
+        try {
+            isFile = (await fs.stat(script)).isFile();
+        }
+        catch {
+            isFile = false;
+        }
+        const looksInline = !isFile && (SHELL_META.test(script) || COMMAND_SPACE.test(script));
+
+        if (input.interpreter) {
+            return {
+                bin: input.interpreter,
+                binArgs: isFile ? [script, ...(input.args ?? [])] : ["-c", script, ...(input.args ?? [])],
+            };
+        }
+
+        if (looksInline) {
+            throw new Error("script= looks like an inline shell command, not a file path. " +
+                `Pass a script file path, or set interpreter="bash" to run an inline command (got: "${script}").`);
+        }
+        return { bin: script, binArgs: input.args ?? [] };
     }
 
     private killProcessTree(run: Run, signal: NodeJS.Signals = "SIGTERM"): void {
