@@ -20,12 +20,10 @@ function check(name, cond, detail = "") {
 
 const notifications = [];
 const client = {
-    session: {
-        get: async () => ({ data: {} }),
-        promptAsync: async ({ body }) => {
-            notifications.push(body.parts[0].text);
-            return {};
-        },
+    get: async () => ({}),
+    synthetic: async (input) => {
+        notifications.push({ text: input.text, resume: input.resume });
+        return {};
     },
 };
 
@@ -94,10 +92,11 @@ check("bad run error message set", !!badFinal?.error && /Failed to start|ENOENT/
 const badLog = fs.readFileSync(path.join(baseDir, `${badRun.id}.log`), "utf8");
 check("bad run log exists and has error text", fs.existsSync(path.join(baseDir, `${badRun.id}.log`)) && /Failed to start/.test(badLog));
 await new Promise((r) => setTimeout(r, 300));
-const notif = notifications[notifications.length - 1] ?? "";
+const notif = notifications[notifications.length - 1]?.text ?? "";
 check("notification has <error> line", /<error>/.test(notif), notif);
 check("notification status error", /<status>error<\/status>/.test(notif));
 check("notification exit-code none", /<exit-code>none<\/exit-code>/.test(notif));
+check("notification resumes the session", notifications[notifications.length - 1]?.resume === true);
 
 // --- Test 4: script_status surfaces error (#5) ---
 console.log("== Test 4: status includes error ==");

@@ -18,15 +18,13 @@ function check(name, cond, detail = "") {
     }
 }
 
-const promptCalls = [];
+const notifyCalls = [];
 
 const client = {
-    session: {
-        get: async () => ({ data: {} }),
-        promptAsync: async () => {
-            promptCalls.push(Date.now());
-            return {};
-        },
+    get: async () => ({}),
+    synthetic: async () => {
+        notifyCalls.push(Date.now());
+        return {};
     },
 };
 
@@ -70,12 +68,12 @@ await new Promise((resolve) => setTimeout(resolve, 600));
 const tInvoked = Date.now();
 const cancelResult = await manager.cancel(run.id);
 const tResolved = Date.now();
-const during = promptCalls.filter((t) => t >= tInvoked && t <= tResolved);
+const during = notifyCalls.filter((t) => t >= tInvoked && t <= tResolved);
 
 console.log(`cancel() in-flight window: ${tResolved - tInvoked}ms`);
 check("cancel() resolves quickly (<1s)", tResolved - tInvoked < 1000, `took ${tResolved - tInvoked}ms`);
 check("cancel() returns the run", cancelResult && cancelResult.status === "cancelled");
-check("no promptAsync during cancel in-flight window", during.length === 0, `count=${during.length}`);
+check("no notification during cancel in-flight window", during.length === 0, `count=${during.length}`);
 
 // escalation fires at +2s and must SIGKILL the stubborn grandchild
 await new Promise((resolve) => setTimeout(resolve, 2400));
@@ -90,7 +88,7 @@ catch {
 check("process group is dead after escalation SIGKILL", !groupAlive);
 
 await new Promise((resolve) => setTimeout(resolve, 400));
-check("no wake notification emitted for cancelled run at all", promptCalls.length === 0, `count=${promptCalls.length}`);
+check("no wake notification emitted for cancelled run at all", notifyCalls.length === 0, `count=${notifyCalls.length}`);
 
 // cleanup
 try { process.kill(-run.child.pid, "SIGKILL"); } catch { /* ignore */ }

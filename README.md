@@ -4,6 +4,8 @@ Run a shell script in the background from OpenCode and get notified when it fini
 
 This is an OpenCode server plugin. It runs on your machine inside the OpenCode server process, so a background script survives the tool call that started it.
 
+> **Requires OpenCode 2.** This is a V2 plugin, built against `@opencode/plugin` 2.x. It uses the V2 plugin API (`Plugin.define` + `setup(ctx)`), so it does not load on OpenCode 1.x. Use version `0.1.x` if you are still on OpenCode 1.
+
 ## Features
 
 - Start any script with one tool call and get a run id back immediately.
@@ -17,18 +19,29 @@ This is an OpenCode server plugin. It runs on your machine inside the OpenCode s
 
 This package is published to the public npm registry.
 
-Add it to your OpenCode config. Open your global config at `~/.config/opencode/opencode.json` and add the package name to the `plugin` array:
+Add it to your OpenCode config. Open your global config at `~/.config/opencode/opencode.json` and add the package name to the `plugins` array:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": [
+  "plugins": [
     "opencode-script-runner"
   ]
 }
 ```
 
 OpenCode downloads and installs npm plugins automatically at startup. Quit and restart OpenCode for the change to take effect.
+
+To pass options, use the object form:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    { "package": "opencode-script-runner" }
+  ]
+}
+```
 
 That is all. No manual download or setup is needed.
 
@@ -120,10 +133,19 @@ A failed run reports `status=error` (or `timeout`/`cancelled`) with a non-zero o
 ## Development
 
 ```bash
-npm install      # install dependencies
+npm install        # install dependencies
 npm run typecheck  # type check only
-npm run build    # compile TypeScript to dist/
-npm publish      # build and publish to npm (runs build automatically first)
+npm run build      # compile TypeScript to dist/
+npm publish        # build and publish to npm (runs build automatically first)
+```
+
+The `repro/` directory holds two standalone harnesses that exercise `RunManager`
+against a stub session client, without needing a live OpenCode server:
+
+```bash
+npm run build
+node repro/smoke-fixes.mjs    # tool-level regression checks
+node repro/trace-cancel.mjs   # process-group kill + escalation
 ```
 
 ## License

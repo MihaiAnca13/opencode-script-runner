@@ -3,13 +3,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomInt } from "node:crypto";
+import type { SessionClient } from "./session-client.js";
 
 const MAX_LOG_TAIL = 20000;
 
 const SHELL_META = /[&|;<>()$`\\{}*?[\]!~\n]/;
 const COMMAND_SPACE = /^\s*(\S+)\s+\S/;
-
-type Client = ReturnType<typeof import("@opencode-ai/sdk").createOpencodeClient>;
 
 type RunStatus = "running" | "complete" | "cancelled" | "error" | "timeout";
 
@@ -17,7 +16,6 @@ export type Run = {
     id: string;
     sessionID: string;
     rootID: string;
-    agent?: string;
     script: string;
     child?: ChildProcess;
     status: RunStatus;
@@ -85,18 +83,17 @@ ${escapeMarkup(tail)}
 }
 
 export class RunManager {
-    private client: Client;
+    private client: SessionClient;
     private baseDir: string;
     private runs = new Map<string, Run>();
 
-    constructor(client: Client, baseDir: string) {
+    constructor(client: SessionClient, baseDir: string) {
         this.client = client;
         this.baseDir = baseDir;
     }
 
     async start(input: {
         sessionID: string;
-        agent?: string;
         script: string;
         args?: string[];
         cwd?: string;
@@ -119,7 +116,6 @@ export class RunManager {
             id,
             sessionID: input.sessionID,
             rootID,
-            agent: input.agent,
             script: input.script,
             status: "running",
             exitCode: null,
@@ -302,13 +298,14 @@ export class RunManager {
         const text = extra
             ? `${formatWakeNotification(run)}\n\n${extra}`
             : formatWakeNotification(run);
-        const parts = [{ type: "text" as const, text }];
+        // `resume: true` wakes the session so the agent reacts to the run finishing.
+        // V1 did the same thing with `session.promptAsync({ noReply: false })`.
         void Promise.resolve(
-            this.client.session.promptAsync({
-                path: { id: run.sessionID },
-                body: run.agent
-                    ? { noReply: false, agent: run.agent, parts }
-                    : { noReply: false, parts },
+            this.client.synthetic({
+                sessionID: run.sessionID,
+                text,
+                description: `background script ${run.id} ${run.status}`,
+                resume: true,
             }),
         ).catch((error) => {
             void this.debug(`notify failed: ${error instanceof Error ? error.message : "unknown error"}`);
@@ -362,8 +359,8 @@ export class RunManager {
         let current = sessionID;
         for (let depth = 0; depth < 16; depth += 1) {
             try {
-                const session = await this.client.session.get({ path: { id: current } });
-                const parentID = session.data?.parentID;
+                const session = await this.client.get({ sessionID: current });
+                const parentID = session?.parentID;
                 if (!parentID) {
                     return current;
                 }
